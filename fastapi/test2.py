@@ -31,7 +31,7 @@ def pdf_to_text(pdf_file):
         return "No text found"
 
 if __name__ == "__main__":
-    pdf_file_path = "test.pdf"
+    pdf_file_path = "./data/test2.pdf"
     extracted_text = pdf_to_text(pdf_file_path)
     print("Extracted text:")
     print(extracted_text)

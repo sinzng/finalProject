@@ -1,11 +1,39 @@
 from google.cloud import storage
 import io
 import os
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, convert_from_bytes
 from google.cloud import vision
 
 # Google Cloud Vision API 인증을 위한 환경 변수 설정
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "./ocr_key.json"
+
+# Initialize the Google Cloud Vision client
+client = vision.ImageAnnotatorClient()
+
+
+def pdf_stream_to_text(pdf_stream):
+    # PDF 스트림 데이터를 이미지로 변환
+    images = convert_from_bytes(pdf_stream)
+    
+    # 첫 번째 페이지를 이미지로 변환
+    if images:
+        image = images[0]
+        with io.BytesIO() as output:
+            image.convert("RGB").save(output, format="JPEG")
+            image_data = output.getvalue()
+        
+        # Vision API 요청을 위한 Image 객체 생성
+        vision_image = vision.Image(content=image_data)
+        
+        # 텍스트 인식 요청 및 결과 처리
+        response = client.text_detection(image=vision_image)
+        texts = response.text_annotations
+        if texts:
+            return texts[0].description
+        else:
+            return "No text found"
+    else:
+        return "No images found in PDF"
 
 def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
     """Uploads a file to the bucket."""
@@ -131,3 +159,5 @@ gcs_source_uri = "gs://ocr_dataa/ocr_data/test2.pdf"
 gcs_destination_uri = "gs://ocr_dataa/ocr_data/output/"
 output_text_file = f"./txt_data/{file_name}.json"
 async_detect_document_to_text(gcs_source_uri, gcs_destination_uri, output_text_file)
+
+
