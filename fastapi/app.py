@@ -56,37 +56,45 @@ def pdf_stream_to_jpg(pdf_stream):
         # PDF 스트림 데이터를 이미지로 변환
         images = convert_from_bytes(pdf_stream)
         
-        # 첫 번째 페이지를 이미지로 변환
-        if images:
-            image = images[0]
+        if not images:
+            raise HTTPException(status_code=400, detail="No images found in PDF")
+
+        image_datas = []
+        for image in images:
             with io.BytesIO() as output:
                 image.convert("RGB").save(output, format="JPEG")
                 image_data = output.getvalue()
-            return image_data
-        else:
-            raise HTTPException(status_code=400, detail="No images found in PDF")
+                image_datas.append(image_data)
+                
+        return image_datas
     except Exception as e:
         print(f"Error converting PDF to image: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def image_to_text(image_data):
     try:
-        # Vision API 요청을 위한 Image 객체 생성
-        vision_image = vision.Image(content=image_data)
         client = vision.ImageAnnotatorClient()
-        
-        # 텍스트 인식 요청 및 결과 처리
-        response = client.text_detection(image=vision_image)
-        texts = response.text_annotations
-        if texts:
-            full_text = texts[0].description
-        else:
-            full_text = "No text found"
-        
+        full_texts = []
+
+        for img_data in image_data:
+            # Vision API 요청을 위한 Image 객체 생성
+            vision_image = vision.Image(content=img_data)
+            
+            # 텍스트 인식 요청 및 결과 처리
+            response = client.text_detection(image=vision_image)
+            texts = response.text_annotations
+            if texts:
+                full_text = texts[0].description
+            else:
+                full_text = "No text found"
+            
+            full_texts.append(full_text)
+
         # Create a dictionary in the required format
         output_data = {
             "result": 200,
-            "text": full_text
+            "texts": full_texts
         }
         return output_data
     except Exception as e:
