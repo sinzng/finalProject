@@ -4,14 +4,13 @@ from fastapi.responses import JSONResponse
 from test2 import pdf_to_text
 from google.cloud import vision
 from pdf2image import convert_from_bytes
+from dotenv import load_dotenv
 from PIL import Image
-import io
-import json
-import os
-import uuid
+import io, json, os, uuid, requests
 
 app = FastAPI()
-
+load_dotenv()
+YJ_IP = os.getenv("YJ_IP")
 # 전역 변수로 파일 경로 저장
 global uploaded_file_path
 
@@ -104,36 +103,75 @@ def image_to_text(image_data):
 @app.post("/upload")
 async def upload_stream(request: Request):
     try:
-        # 스트림 데이터 읽기
-        body = await request.body()
-        print(f"Received body: {body[:100]}...")  # 앞의 100바이트만 출력하여 데이터가 수신되었는지 확인
-        
-        # 스트림 데이터를 JPEG 이미지로 변환
-        jpg_image_data = pdf_stream_to_jpg(body)
-        
-        # 이미지 데이터를 텍스트로 변환
-        extracted_data = image_to_text(jpg_image_data)
-        # 고유한 파일 이름 생성
-        unique_filename = str(uuid.uuid4())
-        
-        # 추출된 텍스트를 JSON 파일로 저장
-        upload_dir = "./uploaded_files"
-        ensure_dir(upload_dir)
-        
-        json_file_location = os.path.join(upload_dir, f"{unique_filename}.json")
-        with open(json_file_location, 'w', encoding='utf-8') as json_file:
-            json.dump(extracted_data, json_file, ensure_ascii=False, indent=4)
-        
-        print(f"Extracted text saved at: {json_file_location}")
-        
-        # text 키의 값만 추출하여 반환
-        text_value = extracted_data.get("text", "")
+        # 요청 헤더에서 title 가져오기
+        title = request.headers.get("titles")
+        if not title:
+            raise HTTPException(status_code=400, detail="Title header is missing.")
 
-        return JSONResponse(content={"text": text_value})
+        # 팀원의 getFullText API 호출하여 full_text 존재 여부 확인
+        response = requests.get(f"{YJ_IP}:3500/getFullText", params={"title": title})
+        print(response.json())
+        
+        if response.json().get("resultCode") == 200 and response.json().get("data"):
+            # title이 이미 존재하고, full_text 데이터를 가져옴
+            print(f"Full text already exists for title: {title}")
+            text_value = response.json().get("data")
+            return JSONResponse(content={"titles": title, "texts": text_value})
+        else:
+            # PDF 스트림 데이터 읽기
+            pdf_stream_data = await request.body()
+        
+            print(f"Received title: {title}")
+            #print(f"Received pdf_stream: {pdf_stream_data[:100]}...")  # 앞의 100바이트만 출력하여 데이터가 수신되었는지 확인
+        
+            # PDF 스트림 데이터를 JPEG 이미지로 변환
+            jpg_image_data = pdf_stream_to_jpg(pdf_stream_data)
+        
+            # 이미지 데이터를 텍스트로 변환
+            extracted_data = image_to_text(jpg_image_data)
+        
+            # title을 포함한 새로운 데이터 생성
+            output_data = {
+                "title": title,
+                "result": extracted_data["result"],
+                "texts": extracted_data["texts"]
+            }
+        
+            # 고유한 파일 이름 생성
+            unique_filename = str(uuid.uuid4())
+        
+            # 추출된 텍스트와 title을 JSON 파일로 저장
+            upload_dir = "./uploaded_files"
+            ensure_dir(upload_dir)
+        
+            json_file_location = os.path.join(upload_dir, f"{unique_filename}.json")
+            with open(json_file_location, 'w', encoding='utf-8') as json_file:
+                json.dump(output_data, json_file, ensure_ascii=False, indent=4)
+        
+            print(f"Extracted text and title saved at: {json_file_location}")
+            
+            print(extracted_data["texts"][0])
+            # 존재하지 않으면 store_full_text API 호출하여 저장
+            payload = {
+                "title": title,
+                "text": extracted_data["texts"][0]
+            }
+            headers = {"Content-Type": "application/json"}
+            response = requests.post(f"{YJ_IP}:3500/store_full_text", data=json.dumps(payload), headers=headers)
+            
+            if response.json().get("resultCode") == 200:
+                result = response.json()
+                text_value = result.get("data", "")
+                print(f"Data stored successfully: {result}")
+            else:
+                print(f"Failed to store data: {response.status_code} - {response.text}")
+                text_value = "Failed to store data"
+
+            return JSONResponse(content={"titles": title, "texts": text_value})
     except Exception as e:
         print(f"Error in /upload: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
     
 @app.get("/ocrtext")
 async def get_ocrtext(uploaded_file_path):
