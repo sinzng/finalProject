@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from test2 import pdf_to_text
@@ -7,10 +7,14 @@ from pdf2image import convert_from_bytes
 from dotenv import load_dotenv
 from PIL import Image
 import io, json, os, uuid, requests
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.docstore.document import Document
+
 
 app = FastAPI()
 load_dotenv()
 YJ_IP = os.getenv("YJ_IP")
+CY_IP = os.getenv("CY_IP")
 # 전역 변수로 파일 경로 저장
 global uploaded_file_path
 
@@ -70,36 +74,60 @@ def pdf_stream_to_jpg(pdf_stream):
         print(f"Error converting PDF to image: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 def image_to_text(image_data):
     try:
         client = vision.ImageAnnotatorClient()
-        full_texts = []
+        combined_text = ""
 
         for img_data in image_data:
             # Vision API 요청을 위한 Image 객체 생성
             vision_image = vision.Image(content=img_data)
             
             # 텍스트 인식 요청 및 결과 처리
-            response = client.text_detection(image=vision_image)
-            texts = response.text_annotations
-            if texts:
-                full_text = texts[0].description
+            response = client.document_text_detection(image=vision_image)
+            full_text = ""
+
+            if response.full_text_annotation:
+                for page in response.full_text_annotation.pages:
+                    for block in page.blocks:
+                        for paragraph in block.paragraphs:
+                            paragraph_text = ''
+                            for word in paragraph.words:
+                                word_text = ''.join([symbol.text for symbol in word.symbols])
+                                paragraph_text += word_text + ' '  # 단어 간 공백 추가
+                            full_text += paragraph_text.strip() + "\\n\\n"  # 단락 구분을 위해 두 개의 개행 문자를 추가하고 앞뒤 공백 제거
             else:
                 full_text = "No text found"
             
-            full_texts.append(full_text)
+            # 텍스트를 바로 결합
+            combined_text += full_text
 
+        print(f"Combined text length: {len(combined_text)}")
+        # 텍스트 분할 및 필터링
+        document = Document(page_content=combined_text)
+        text_splitter = CharacterTextSplitter(separator="\\n\\n", chunk_size=2000, chunk_overlap=100)
+        split_docs = text_splitter.split_documents([document])
+        
+        filtered_docs = []
+        for doc in split_docs:
+            if "References" in doc.page_content:
+                doc.page_content = doc.page_content.split("References")[0]
+                filtered_docs.append(doc.page_content)
+                break
+            filtered_docs.append(doc.page_content)
+        
+        filtered_text = "\\n\\n".join(filtered_docs)
+        
         # Create a dictionary in the required format
         output_data = {
             "result": 200,
-            "texts": full_texts
+            "texts": filtered_text
         }
         return output_data
     except Exception as e:
         print(f"Error processing image for OCR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.post("/upload")
 async def upload_stream(request: Request):
     try:
@@ -110,6 +138,7 @@ async def upload_stream(request: Request):
 
         # 팀원의 getFullText API 호출하여 full_text 존재 여부 확인
         response = requests.get(f"{YJ_IP}:3500/getFullText", params={"title": title})
+        
         print(response.json())
         
         if response.json().get("resultCode") == 200 and response.json().get("data"):
@@ -130,12 +159,14 @@ async def upload_stream(request: Request):
             # 이미지 데이터를 텍스트로 변환
             extracted_data = image_to_text(jpg_image_data)
         
+
             # title을 포함한 새로운 데이터 생성
             output_data = {
                 "title": title,
-                "result": extracted_data["result"],
-                "texts": extracted_data["texts"]
+                "result": extracted_data.get("result"),
+                "texts": extracted_data.get("texts") 
             }
+            #print(output_data)
         
             # 고유한 파일 이름 생성
             unique_filename = str(uuid.uuid4())
@@ -150,29 +181,58 @@ async def upload_stream(request: Request):
         
             print(f"Extracted text and title saved at: {json_file_location}")
             
-            print(extracted_data["texts"][0])
+
             # 존재하지 않으면 store_full_text API 호출하여 저장
             payload = {
                 "title": title,
-                "text": extracted_data["texts"][0]
+                "text": extracted_data.get("texts")
             }
             headers = {"Content-Type": "application/json"}
             response = requests.post(f"{YJ_IP}:3500/store_full_text", data=json.dumps(payload), headers=headers)
             
             if response.json().get("resultCode") == 200:
                 result = response.json()
-                text_value = result.get("data", "")
-                print(f"Data stored successfully: {result}")
+                text_value = result.get("text", "")
+                print(f"Data stored successfully")
             else:
                 print(f"Failed to store data: {response.status_code} - {response.text}")
                 text_value = "Failed to store data"
-
-            return JSONResponse(content={"titles": title, "texts": text_value})
+                
+            return JSONResponse(content={"titles": title, "texts": payload.get("text")}) 
+        
     except Exception as e:
         print(f"Error in /upload: {str(e)}")
+    
+@app.post("/keyword")
+async def getKeyword(title: str = Form(...)):
+    try:
+        # 팀원의 getFullText API 호출하여 full_text 존재 여부 확인
+        response = requests.get(f"{YJ_IP}:3500/getFullText", params={"title": title})
+        
+        response_data = response.json()
+        print(response_data)
+        
+        if response_data.get("resultCode") == 200 and response_data.get("data"):
+            # title이 이미 존재하고, full_text 데이터를 가져옴
+            print(f"Full text already exists for title: {title}")
+            text_value = response_data.get("data")
+            # Bert_Keyword API 호출하여 키워드 추출
+            bert_keyword_response = requests.post(
+                f"{CY_IP}:8000/Bert_Keyword",  # Bert_Keyword API의 실제 URL로 변경
+                json={"text": text_value}
+            )
+            bert_keyword_data = bert_keyword_response.json()
+            
+            return JSONResponse(content={"titles": title, "keywords": bert_keyword_data})
+        else:
+            
+            print("저장된 텍스트 파일이 없습니다.")
+            return JSONResponse(content={"detail": "저장된 텍스트 파일이 없습니다."}, status_code=404)
+        
+    except Exception as e:
+        print(f"Error in /keyword: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-    
+
 @app.get("/ocrtext")
 async def get_ocrtext(uploaded_file_path):
     try:

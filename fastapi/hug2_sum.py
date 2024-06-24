@@ -1,21 +1,21 @@
 import time
 import torch
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import json
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.docstore.document import Document
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from langchain.chains.summarize import load_summarize_chain
-from langchain.llms.base import LLM
+from multiprocessing import Pool, cpu_count
 
 # 1. 텍스트 분할 설정
-with open("./data/test.txt") as f:
-    text_all = f.read()
+with open("./uploaded_files/test.json", 'r', encoding='utf-8') as f:
+    data = json.load(f)
 
-# 텍스트 분할 설정
+text_all = data.get("texts", "")
+
 text_splitter = CharacterTextSplitter(
-    separator="\\n\\n",  # 문단 단위로 분할
-    chunk_size=1000,  # 청크 크기를 1000으로 설정
-    chunk_overlap=100  # 중첩을 100으로 설정
+    separator="\\n\\n",
+    chunk_size=2000,
+    chunk_overlap=100
 )
 texts = text_splitter.split_text(text_all)
 print(f"Total chunks: {len(texts)}")
@@ -36,57 +36,26 @@ def summarize_text(text, max_length=512, min_length=30):
     summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
     return summary
 
-# 3. LangChain의 MapReduce 체인에 통합
-class HuggingFaceLLM(LLM):
-    def _call(self, prompt: str, stop=None):
-        return summarize_text(prompt)
-    
-    def _identifying_params(self):
-        return {"model_name": model_name}
-    
-    @property
-    def _llm_type(self) -> str:
-        return "huggingface"
-
-    def dict(self):
-        return dict(self._identifying_params())
-
-llm = HuggingFaceLLM()
-chain = load_summarize_chain(
-    llm=llm,
-    chain_type="map_reduce",
-)
-
-# 병렬 처리로 각 청크 요약
-def process_chunk(doc):
+# 3. 텍스트 요약 함수 병렬 처리
+def parallel_summarize(doc):
     return summarize_text(doc.page_content)
 
 if __name__ == "__main__":
     start_time = time.time()
 
-    chunk_summaries = []
-    with ProcessPoolExecutor() as executor:
-        futures = {executor.submit(process_chunk, doc): i for i, doc in enumerate(docs)}
-        for future in as_completed(futures):
-            i = futures[future]
-            try:
-                chunk_summary = future.result()
-                print(f"Chunk {i+1} summary completed")
-                chunk_summaries.append(Document(page_content=chunk_summary))
-            except Exception as exc:
-                print(f"Chunk {i+1} generated an exception: {exc}")
+    # 병렬 처리를 위한 Pool 설정
+    with Pool(processes=cpu_count()) as pool:
+        chunk_summaries = pool.map(parallel_summarize, docs)
+
+    chunk_summary_docs = [Document(page_content=summary) for summary in chunk_summaries]
 
     end_time = time.time()
     print(f"Chunk summaries completed in {end_time - start_time:.2f} seconds")
-    print(chunk_summaries[:100])
 
-    # 문서 요약 실행
-    summary_start_time = time.time()
-    summary = chain.run(chunk_summaries)  # 요약된 청크들을 다시 사용하여 최종 요약 생성
-    summary_end_time = time.time()
-    print(f"Final summary completed in {summary_end_time - summary_start_time:.2f} seconds")
+    # 최종 요약 (필요 시)
+    final_summary = "\n\n".join(chunk_summaries)
     print("Final summary:")
-    print(summary)
+    print(final_summary)
 
-    total_time = summary_end_time - start_time
+    total_time = time.time() - start_time
     print(f"Total processing time: {total_time:.2f} seconds")
