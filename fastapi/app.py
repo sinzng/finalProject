@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from test2 import pdf_to_text
@@ -204,13 +204,16 @@ async def upload_stream(request: Request):
         print(f"Error in /upload: {str(e)}")
     
 @app.post("/keyword")
-async def getKeyword(title: str = Form(...)):
+async def getKeyword(data: dict = Body(...)):
     try:
+        title = data.get("title")
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required.")
+
         # 팀원의 getFullText API 호출하여 full_text 존재 여부 확인
         response = requests.get(f"{YJ_IP}:3500/getFullText", params={"title": title})
         
         response_data = response.json()
-        print(response_data)
         
         if response_data.get("resultCode") == 200 and response_data.get("data"):
             # title이 이미 존재하고, full_text 데이터를 가져옴
@@ -225,7 +228,6 @@ async def getKeyword(title: str = Form(...)):
             
             return JSONResponse(content={"titles": title, "keywords": bert_keyword_data})
         else:
-            
             print("저장된 텍스트 파일이 없습니다.")
             return JSONResponse(content={"detail": "저장된 텍스트 파일이 없습니다."}, status_code=404)
         
@@ -233,6 +235,17 @@ async def getKeyword(title: str = Form(...)):
         print(f"Error in /keyword: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/getSum1")
+async def getsum(title: str):
+    try:
+        response = requests.get(f"{YJ_IP}:3500/getSummary1", params={"title": title})
+        response.raise_for_status()  
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Error in /getSum: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @app.get("/ocrtext")
 async def get_ocrtext(uploaded_file_path):
     try:
@@ -258,6 +271,19 @@ async def get_ocrtext(uploaded_file_path):
         print(f"Error in /ocrtext: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
-    
+@app.get("/getTime")
+async def get_time(title:str):
+    try :
+        time1_response1 = requests.get(f"{YJ_IP}:3500/getTime1?title={title}")
+        time1 = time1_response1.json()
+        time2_response1 = requests.get(f"{YJ_IP}:3500/getTime2?title={title}")
+        time2 = time2_response1.json()
+        time3_response1 = requests.get(f"{YJ_IP}:3500/getTime3?title={title}")
+        time3 = time3_response1.json()
+    except Exception as e:
+        print(f"Error in /getTime: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    return time1, time2, time3
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=3000)
