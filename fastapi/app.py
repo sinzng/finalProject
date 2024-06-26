@@ -151,7 +151,6 @@ async def upload_stream(request: Request):
             pdf_stream_data = await request.body()
         
             print(f"Received title: {title}")
-            #print(f"Received pdf_stream: {pdf_stream_data[:100]}...")  # 앞의 100바이트만 출력하여 데이터가 수신되었는지 확인
         
             # PDF 스트림 데이터를 JPEG 이미지로 변환
             jpg_image_data = pdf_stream_to_jpg(pdf_stream_data)
@@ -160,39 +159,39 @@ async def upload_stream(request: Request):
             extracted_data = image_to_text(jpg_image_data)
         
 
-            # title을 포함한 새로운 데이터 생성
-            output_data = {
-                "title": title,
-                "result": extracted_data.get("result"),
-                "texts": extracted_data.get("texts") 
-            }
-            #print(output_data)
-        
-            # 고유한 파일 이름 생성
-            unique_filename = str(uuid.uuid4())
-        
-            # 추출된 텍스트와 title을 JSON 파일로 저장
-            upload_dir = "./uploaded_files"
-            ensure_dir(upload_dir)
-        
-            json_file_location = os.path.join(upload_dir, f"{unique_filename}.json")
-            with open(json_file_location, 'w', encoding='utf-8') as json_file:
-                json.dump(output_data, json_file, ensure_ascii=False, indent=4)
-        
-            print(f"Extracted text and title saved at: {json_file_location}")
+            # # title을 포함한 새로운 데이터 생성
+            # output_data = {
+            #     "title": title,
+            #     "result": extracted_data.get("result"),
+            #     "texts": extracted_data.get("texts") 
+            # }
             
+            # # 고유한 파일 이름 생성
+            # unique_filename = str(uuid.uuid4())
+        
+            # # 추출된 텍스트와 title을 JSON 파일로 저장
+            # upload_dir = "./uploaded_files"
+            # ensure_dir(upload_dir)
+        
+            # json_file_location = os.path.join(upload_dir, f"{unique_filename}.json")
+            # with open(json_file_location, 'w', encoding='utf-8') as json_file:
+            #     json.dump(output_data, json_file, ensure_ascii=False, indent=4)
+        
+            # print(f"Extracted text and title saved at: {json_file_location}")
+            print(f"Extracted text and title saved")
 
-            # 존재하지 않으면 store_full_text API 호출하여 저장
+            #존재하지 않으면 store_full_text API 호출하여 저장
             payload = {
                 "title": title,
+                "result": extracted_data.get("result"),
                 "text": extracted_data.get("texts")
             }
             headers = {"Content-Type": "application/json"}
             response = requests.post(f"{YJ_IP}:3500/store_full_text", data=json.dumps(payload), headers=headers)
             
             if response.json().get("resultCode") == 200:
-                result = response.json()
-                text_value = result.get("text", "")
+                # result = response.json()
+                # text_value = result.get("text", "")
                 print(f"Data stored successfully")
             else:
                 print(f"Failed to store data: {response.status_code} - {response.text}")
