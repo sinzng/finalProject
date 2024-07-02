@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from test2 import pdf_to_text
 from google.cloud import vision
 from pdf2image import convert_from_bytes
@@ -9,7 +9,7 @@ from PIL import Image
 import io, json, os, uuid, requests
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.docstore.document import Document
-
+from search import search_query
 
 app = FastAPI()
 load_dotenv()
@@ -17,10 +17,25 @@ YJ_IP = os.getenv("YJ_IP")
 CY_IP = os.getenv("CY_IP")
 # 전역 변수로 파일 경로 저장
 global uploaded_file_path
+# @app.get("/", response_class=HTMLResponse)
+# async def home():
+#     return """
+#     <html>
+#     <body>
+#         <h1>Google Custom Search</h1>
+#         <form action="/search" method="post">
+#             <input type="text" name="query" placeholder="Enter search term">
+#             <input type="submit" value="Search">
+#         </form>
+#     </body>
+#     </html>
+#     """
 
-@app.get("/")
-def read_root():
-    return {"Hello" : "World"}
+@app.post("/search", response_class=HTMLResponse)
+async def search(query: str = Form(...)):
+    return await search_query(query)
+
+
 # 디렉토리가 없으면 생성하는 함수
 def ensure_dir(directory):
     if not os.path.exists(directory):
