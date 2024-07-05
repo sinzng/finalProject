@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi import Request
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from test2 import pdf_to_text
 from google.cloud import vision
 from pdf2image import convert_from_bytes
@@ -10,26 +11,45 @@ import io, json, os, uuid, requests
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.docstore.document import Document
 from search import search_query
+from fastapi.templating import Jinja2Templates
+from authlib.integrations.starlette_client import OAuth
 
 app = FastAPI()
 load_dotenv()
+
+oauth = OAuth()
+oauth.register(
+    name='google',
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    authorize_url='https://accounts.google.com/o/oauth2/auth',
+    authorize_params=None,
+    access_token_url='https://accounts.google.com/o/oauth2/token',
+    access_token_params=None,
+    refresh_token_url=None,
+    redirect_uri='http://<your_ec2_domain>/auth/callback',
+    client_kwargs={'scope': 'openid profile email'},
+)
+
+@app.get('/auth')
+async def auth(request: Request):
+    redirect_uri = 'http://<your_ec2_domain>/auth/callback'
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+@app.get('/auth/callback')
+async def auth_callback(request: Request):
+    token = await oauth.google.authorize_access_token(request)
+    user = await oauth.google.parse_id_token(request, token)
+    # 여기에 세션 설정 또는 토큰 반환 로직을 추가할 수 있습니다.
+    return {"user": user}
+
+
 YJ_IP = os.getenv("YJ_IP")
 CY_IP = os.getenv("CY_IP")
 # 전역 변수로 파일 경로 저장
 global uploaded_file_path
-# @app.get("/", response_class=HTMLResponse)
-# async def home():
-#     return """
-#     <html>
-#     <body>
-#         <h1>Google Custom Search</h1>
-#         <form action="/search" method="post">
-#             <input type="text" name="query" placeholder="Enter search term">
-#             <input type="submit" value="Search">
-#         </form>
-#     </body>
-#     </html>
-#     """
+
+
 
 @app.post("/search", response_class=HTMLResponse)
 async def search(query: str = Form(...)):
@@ -40,35 +60,7 @@ async def search(query: str = Form(...)):
 def ensure_dir(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
-# ---- pdf로 변환 ----
-# @app.post("/upload")
-# async def upload_stream(request: Request):
-#     try:
-#         # 파일 저장 경로 설정
-#         upload_dir = "./uploaded_files"
-#         ensure_dir(upload_dir)
-#         pdf_file_location = os.path.join(upload_dir, "uploaded_file.pdf")
-        
-#         # 스트림 데이터 읽기
-#         body = await request.body()
-#         print(f"Received body: {body[:100]}...")  # 앞의 100바이트만 출력하여 데이터가 수신되었는지 확인
-        
-#         # 바이트 데이터를 PDF로 변환
-#         byte_pdf = bytes(body)
-        
-#         # PDF 파일로 저장
-#         with open(pdf_file_location, 'wb') as outfile:
-#             outfile.write(byte_pdf)
-        
-#         # 저장된 파일 경로를 전역 변수에 저장
-#         uploaded_file_path = pdf_file_location
-#         print(f"PDF created at: {uploaded_file_path}")
-#         res = await get_ocrtext(uploaded_file_path)
-        
-#         return res
-#     except Exception as e:
-#         print(f"Error in /upload: {str(e)}")
-#         raise HTTPException(status_code=500, detail=str(e))
+
 def pdf_stream_to_jpg(pdf_stream):
     try:
         # PDF 스트림 데이터를 이미지로 변환
@@ -143,7 +135,7 @@ def image_to_text(image_data):
         print(f"Error processing image for OCR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.post("/upload")
+@app.post("/ocr/ocrPdf")
 async def upload_stream(request: Request):
     try:
         # 요청 헤더에서 title 가져오기
@@ -160,7 +152,7 @@ async def upload_stream(request: Request):
             # title이 이미 존재하고, full_text 데이터를 가져옴
             print(f"Full text already exists for title: {title}")
             text_value = response.json().get("data")
-            return JSONResponse(content={"titles": title, "texts": text_value})
+            return JSONResponse(content={"resultCode": 200,  "data": {"titles": title, "texts": text_value}})
         else:
             # PDF 스트림 데이터 읽기
             pdf_stream_data = await request.body()
@@ -204,7 +196,7 @@ async def upload_stream(request: Request):
             headers = {"Content-Type": "application/json"}
             response = requests.post(f"{YJ_IP}:3500/store_full_text", data=json.dumps(payload), headers=headers)
             
-            if response.json().get("resultCode") == 200:
+            if response.json().get("resultCode") == 200: 
                 # result = response.json()
                 # text_value = result.get("text", "")
                 print(f"Data stored successfully")
@@ -212,8 +204,8 @@ async def upload_stream(request: Request):
                 print(f"Failed to store data: {response.status_code} - {response.text}")
                 text_value = "Failed to store data"
                 
-            return JSONResponse(content={"titles": title, "texts": payload.get("text")}) 
-        
+            return JSONResponse(content={"resultCode": 200, "data": {"titles": payload.get("title"), "texts": payload.get("text")}}) 
+
     except Exception as e:
         print(f"Error in /upload: {str(e)}")
     
